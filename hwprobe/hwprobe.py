@@ -2,9 +2,12 @@
 """hwprobe — Hardware profiling for AI workstations."""
 
 import glob
+import json
 import socket
 import subprocess
+from typing import Optional
 
+import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -475,11 +478,148 @@ def print_report(cpu, gpus, memory, numa, storage, score):
     ))
 
 
-if __name__ == '__main__':
-    cpu = get_cpu_info()
+# --- CLI ---
+
+app = typer.Typer(help="hwprobe — Hardware profiling for AI workstations.")
+
+JSON_OPTION = typer.Option(False, "--json", "-j", help="Output as JSON")
+
+
+def _collect_all():
+    return {
+        'cpu': get_cpu_info(),
+        'gpus': get_gpu_info(),
+        'memory': get_memory_info(),
+        'numa': get_numa_info(),
+        'storage': get_storage_info(),
+    }
+
+
+def _json_dump(data):
+    console.print_json(json.dumps(data))
+
+
+@app.command()
+def scan(json_output: bool = JSON_OPTION):
+    """Full hardware report with AI readiness score."""
+    data = _collect_all()
+    score = calculate_score(**data)
+    if json_output:
+        _json_dump({**data, 'score': score})
+    else:
+        print_report(data['cpu'], data['gpus'], data['memory'], data['numa'], data['storage'], score)
+
+
+@app.command()
+def cpu(json_output: bool = JSON_OPTION):
+    """CPU information only."""
+    info = get_cpu_info()
+    if json_output:
+        _json_dump(info)
+    else:
+        lines = [
+            f"[bold]CPU:[/bold] {info['model_name']}",
+            f"  Sockets: {info['sockets']}",
+            f"  Cores/socket: {info['cores_per_socket']}",
+            f"  Physical cores: {info['total_physical_cores']}",
+            f"  Logical cores: {info['logical_cores']}",
+            f"  Threads/core: {info['threads_per_core']}",
+            f"  Max MHz: {info['max_mhz']:.1f}",
+        ]
+        console.print(Panel(
+            Text.from_markup("\n".join(lines)),
+            title="[bold]CPU[/bold]",
+            title_align="left",
+            border_style="cyan",
+            padding=(0, 1),
+        ))
+
+
+@app.command()
+def gpu(json_output: bool = JSON_OPTION):
+    """GPU information only."""
     gpus = get_gpu_info()
-    memory = get_memory_info()
-    numa = get_numa_info()
-    storage = get_storage_info()
-    score = calculate_score(cpu, gpus, memory, numa, storage)
-    print_report(cpu, gpus, memory, numa, storage, score)
+    if json_output:
+        _json_dump(gpus)
+        return
+    if not gpus:
+        console.print("[bold red]No GPU detected[/bold red]")
+        return
+    lines = []
+    for i, g in enumerate(gpus):
+        vram_icon = _icon(g['mem_total_mib'] / 1024, 24, 12)
+        temp_icon = _icon(g['temperature'], 80, 90, higher_is_better=False)
+        lines.append(f"[bold]GPU {i}:[/bold] {g['name']} {vram_icon}")
+        lines.append(f"  VRAM: {g['mem_used_mib']:.0f} / {g['mem_total_mib']:.0f} MiB")
+        lines.append(f"  Temp: {g['temperature']:.0f}°C {temp_icon}  Power: {g['power_draw']:.0f}W")
+    console.print(Panel(
+        Text.from_markup("\n".join(lines)),
+        title="[bold]GPU[/bold]",
+        title_align="left",
+        border_style="cyan",
+        padding=(0, 1),
+    ))
+
+
+@app.command()
+def pcie(json_output: bool = JSON_OPTION):
+    """PCIe details for each GPU."""
+    gpus = get_gpu_info()
+    if json_output:
+        _json_dump([{
+            'gpu': i, 'name': g['name'],
+            'pcie_gen': g['pcie_gen'], 'pcie_width': g['pcie_width'],
+        } for i, g in enumerate(gpus)])
+        return
+    if not gpus:
+        console.print("[bold red]No GPU detected[/bold red]")
+        return
+    lines = []
+    for i, g in enumerate(gpus):
+        pcie_icon = _icon(g['pcie_gen'], 4, 3)
+        note = " (idle — may power-save)" if g['pcie_gen'] < 3 else ""
+        lines.append(f"[bold]GPU {i}:[/bold] {g['name']}")
+        lines.append(f"  PCIe: Gen{g['pcie_gen']} x{g['pcie_width']} {pcie_icon}{note}")
+    console.print(Panel(
+        Text.from_markup("\n".join(lines)),
+        title="[bold]PCIe[/bold]",
+        title_align="left",
+        border_style="cyan",
+        padding=(0, 1),
+    ))
+
+
+@app.command()
+def score(json_output: bool = JSON_OPTION):
+    """AI readiness score and warnings only."""
+    data = _collect_all()
+    result = calculate_score(**data)
+    if json_output:
+        _json_dump(result)
+        return
+
+    score_val = result['score']
+    if score_val >= 7.5:
+        score_style = "bold green"
+    elif score_val >= 5.0:
+        score_style = "bold yellow"
+    else:
+        score_style = "bold red"
+
+    lines = [f"[{score_style}]SCORE: {score_val:.1f}/10 — {result['verdict']}[/]"]
+    if result['warnings']:
+        lines.append("")
+        for w in result['warnings']:
+            lines.append(f"{WARN}  {w}")
+
+    console.print(Panel(
+        Text.from_markup("\n".join(lines)),
+        title="[bold]AI READINESS[/bold]",
+        title_align="left",
+        border_style="cyan",
+        padding=(0, 1),
+    ))
+
+
+if __name__ == '__main__':
+    app()
