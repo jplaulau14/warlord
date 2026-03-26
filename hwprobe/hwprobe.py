@@ -238,7 +238,10 @@ def calculate_score(cpu, gpus, memory, numa, storage):
             warnings.append("PCIe Gen3 — Gen4+ recommended for faster data transfer")
         else:
             scores['pcie'] = 0.0
-            warnings.append(f"PCIe Gen{max_pcie} — severely bottlenecks GPU throughput")
+            warnings.append(
+                f"PCIe Gen{max_pcie} detected — may be power-saving (idle GPU). "
+                "Run under load to verify."
+            )
     else:
         scores['pcie'] = 0.0
 
@@ -296,6 +299,8 @@ def calculate_score(cpu, gpus, memory, numa, storage):
         if 'unknown' in nodes_used:
             scores['numa_alignment'] = 0.5
             warnings.append("GPU NUMA node unknown — cannot verify alignment")
+        elif nodes_used == {'-1'}:
+            scores['numa_alignment'] = 1.0
         elif len(nodes_used) == 1 and len(numa['nodes']) >= 1:
             scores['numa_alignment'] = 1.0
         else:
@@ -369,7 +374,12 @@ def print_report(cpu, gpus, memory, numa, storage, score):
         mem_gib = node['mem_total_kb'] / (1024 * 1024)
         print(f"  Node {node['id']}: CPUs {node['cpulist']}, Memory {mem_gib:.1f} GiB")
     for g in numa['gpu_numa']:
-        print(f"  GPU {g['gpu_index']} → NUMA Node {g['numa_node']}")
+        node = g['numa_node']
+        if node == '-1':
+            label = "not associated (single-node or VM)"
+        else:
+            label = node
+        print(f"  GPU {g['gpu_index']} → NUMA Node {label}")
 
     print()
     if storage:
