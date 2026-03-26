@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """hwprobe — Hardware profiling for AI workstations."""
 
+import subprocess
+
 
 def get_cpu_info():
     with open('/proc/cpuinfo', 'r') as f:
@@ -49,5 +51,38 @@ def get_cpu_info():
     print(f"Max CPU MHz:        {max_mhz:.1f}")
 
 
+def get_gpu_info():
+    try:
+        result = subprocess.run(
+            [
+                'nvidia-smi',
+                '--query-gpu=name,memory.total,memory.used,temperature.gpu,'
+                'power.draw,pcie.link.gen.current,pcie.link.width.current',
+                '--format=csv,noheader,nounits',
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except FileNotFoundError:
+        print("GPU:                nvidia-smi not found")
+        return
+    except subprocess.CalledProcessError:
+        print("GPU:                nvidia-smi query failed")
+        return
+
+    for i, line in enumerate(result.stdout.strip().splitlines()):
+        name, mem_total, mem_used, temp, power, pcie_gen, pcie_width = [
+            v.strip() for v in line.split(',')
+        ]
+        print(f"GPU {i}:              {name}")
+        print(f"  VRAM:             {mem_used} / {mem_total} MiB")
+        print(f"  Temperature:      {temp} °C")
+        print(f"  Power draw:       {power} W")
+        print(f"  PCIe:             Gen{pcie_gen} x{pcie_width}")
+
+
 if __name__ == '__main__':
     get_cpu_info()
+    print()
+    get_gpu_info()
