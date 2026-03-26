@@ -151,6 +151,40 @@ def get_numa_info():
         print(f"  GPU {i} → NUMA Node {numa_node}")
 
 
+def get_storage_info():
+    try:
+        result = subprocess.run(
+            ['lsblk', '-d', '-o', 'NAME,SIZE,TYPE,ROTA,TRAN'],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        print("Storage:            lsblk not available")
+        return
+
+    lines = result.stdout.strip().splitlines()
+    header = lines[0]
+    rows = lines[1:]
+
+    for row in rows:
+        parts = row.split()
+        if len(parts) < 4:
+            continue
+
+        name = parts[0]
+        size = parts[1]
+        dtype = parts[2]
+        rota = parts[3]
+        tran = parts[4] if len(parts) > 4 else ''
+
+        if dtype == 'loop':
+            continue
+
+        disk_type = 'NVMe SSD' if tran == 'nvme' else ('SSD' if rota == '0' else 'HDD')
+        print(f"  {name}: {size}, {disk_type}")
+
+
 if __name__ == '__main__':
     get_cpu_info()
     print()
@@ -159,3 +193,5 @@ if __name__ == '__main__':
     get_memory_info()
     print()
     get_numa_info()
+    print()
+    get_storage_info()
