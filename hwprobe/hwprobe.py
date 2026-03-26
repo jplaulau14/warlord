@@ -12,6 +12,7 @@ def get_cpu_info():
     physical_ids = set()
     logical_cores = 0
     cores_per_socket = None
+    max_mhz = 0.0
 
     for block in blocks:
         fields = {}
@@ -32,6 +33,9 @@ def get_cpu_info():
         if cores_per_socket is None and 'cpu cores' in fields:
             cores_per_socket = int(fields['cpu cores'])
 
+        if 'cpu MHz' in fields:
+            max_mhz = max(max_mhz, float(fields['cpu MHz']))
+
     num_sockets = len(physical_ids) if physical_ids else 1
     total_physical_cores = (cores_per_socket or logical_cores) * num_sockets
     threads_per_core = logical_cores // total_physical_cores if total_physical_cores else 1
@@ -42,6 +46,7 @@ def get_cpu_info():
     print(f"Total physical cores: {total_physical_cores}")
     print(f"Logical cores:      {logical_cores}")
     print(f"Threads per core:   {threads_per_core}")
+    print(f"Max CPU MHz:        {max_mhz:.1f}")
 
 
 if __name__ == '__main__':
