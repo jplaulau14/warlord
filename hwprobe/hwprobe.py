@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """hwprobe — Hardware profiling for AI workstations."""
 
+import glob
 import subprocess
 
 
@@ -106,9 +107,55 @@ def get_memory_info():
     print(f"HugePages:          {'enabled' if hugepages > 0 else 'disabled'} ({hugepages} pages)")
 
 
+def get_numa_info():
+    node_dirs = sorted(glob.glob('/sys/devices/system/node/node*'))
+    print(f"NUMA Nodes:         {len(node_dirs)}")
+
+    for node_dir in node_dirs:
+        node_id = node_dir.rsplit('node', 1)[-1]
+
+        with open(f'{node_dir}/cpulist', 'r') as f:
+            cpulist = f.read().strip()
+
+        mem_total_kb = 0
+        with open(f'{node_dir}/meminfo', 'r') as f:
+            for line in f:
+                if 'MemTotal' in line:
+                    mem_total_kb = int(line.split()[-2])
+                    break
+
+        mem_gib = mem_total_kb / (1024 * 1024)
+        print(f"  Node {node_id}: CPUs {cpulist}, Memory {mem_gib:.1f} GiB")
+
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=pci.bus_id', '--format=csv,noheader'],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return
+
+    for i, bus_id in enumerate(result.stdout.strip().splitlines()):
+        bus_id = bus_id.strip().lower()
+        # nvidia-smi returns e.g. 00000000:00:1E.0, sysfs uses 0000:00:1e.0
+        if len(bus_id) > 12:
+            bus_id = bus_id[-12:]
+        numa_path = f'/sys/bus/pci/devices/{bus_id}/numa_node'
+        try:
+            with open(numa_path, 'r') as f:
+                numa_node = f.read().strip()
+        except FileNotFoundError:
+            numa_node = 'unknown'
+        print(f"  GPU {i} → NUMA Node {numa_node}")
+
+
 if __name__ == '__main__':
     get_cpu_info()
     print()
     get_gpu_info()
     print()
     get_memory_info()
+    print()
+    get_numa_info()
