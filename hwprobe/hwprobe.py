@@ -82,7 +82,33 @@ def get_gpu_info():
         print(f"  PCIe:             Gen{pcie_gen} x{pcie_width}")
 
 
+def get_memory_info():
+    with open('/proc/meminfo', 'r') as f:
+        meminfo = {}
+        for line in f:
+            key, rest = line.split(':', 1)
+            value = rest.strip().split()[0]
+            meminfo[key.strip()] = int(value)
+
+    def kb_to_gib(kb):
+        return kb / (1024 * 1024)
+
+    total = meminfo['MemTotal']
+    available = meminfo['MemAvailable']
+    swap_total = meminfo['SwapTotal']
+    swap_used = swap_total - meminfo['SwapFree']
+    hugepages = meminfo.get('HugePages_Total', 0)
+
+    print(f"Total RAM:          {kb_to_gib(total):.1f} GiB")
+    print(f"Available RAM:      {kb_to_gib(available):.1f} GiB")
+    print(f"Swap total:         {kb_to_gib(swap_total):.1f} GiB")
+    print(f"Swap used:          {kb_to_gib(swap_used):.1f} GiB")
+    print(f"HugePages:          {'enabled' if hugepages > 0 else 'disabled'} ({hugepages} pages)")
+
+
 if __name__ == '__main__':
     get_cpu_info()
     print()
     get_gpu_info()
+    print()
+    get_memory_info()
