@@ -2,7 +2,12 @@
 """hwprobe — Hardware profiling for AI workstations."""
 
 import glob
+import socket
 import subprocess
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
 
 
 def get_cpu_info():
@@ -337,67 +342,137 @@ def calculate_score(cpu, gpus, memory, numa, storage):
 
 # --- Display ---
 
+GOOD = "\u2705"
+WARN = "\u26a0\ufe0f"
+CRIT = "\U0001f525"
+
+console = Console()
+
+
 def kb_to_gib(kb):
     return kb / (1024 * 1024)
 
 
-def print_report(cpu, gpus, memory, numa, storage, score):
-    print(f"CPU Model:          {cpu['model_name']}")
-    print(f"Sockets:            {cpu['sockets']}")
-    print(f"Cores per socket:   {cpu['cores_per_socket']}")
-    print(f"Total physical cores: {cpu['total_physical_cores']}")
-    print(f"Logical cores:      {cpu['logical_cores']}")
-    print(f"Threads per core:   {cpu['threads_per_core']}")
-    print(f"Max CPU MHz:        {cpu['max_mhz']:.1f}")
+def _icon(value, good_thresh, warn_thresh, higher_is_better=True):
+    if higher_is_better:
+        if value >= good_thresh:
+            return GOOD
+        elif value >= warn_thresh:
+            return WARN
+        else:
+            return CRIT
+    else:
+        if value < good_thresh:
+            return GOOD
+        elif value < warn_thresh:
+            return WARN
+        else:
+            return CRIT
 
-    print()
+
+def print_report(cpu, gpus, memory, numa, storage, score):
+    hostname = socket.gethostname()
+    lines = []
+
+    # CPU
+    lines.append(
+        f"[bold]CPU:[/bold] {cpu['model_name']} "
+        f"({cpu['total_physical_cores']} cores, {cpu['sockets']} socket)"
+    )
+
+    # RAM
+    ram_gib = kb_to_gib(memory['total_kb'])
+    avail_gib = kb_to_gib(memory['available_kb'])
+    ram_icon = _icon(ram_gib, 64, 32)
+    lines.append(
+        f"[bold]RAM:[/bold] {ram_gib:.1f} GiB ({avail_gib:.1f} GiB available) {ram_icon}"
+    )
+
+    # NUMA
+    node_count = len(numa['nodes'])
+    lines.append(
+        f"[bold]NUMA:[/bold] {node_count} node{'s' if node_count != 1 else ''}"
+    )
+
+    # GPUs
     if gpus:
         for i, g in enumerate(gpus):
-            print(f"GPU {i}:              {g['name']}")
-            print(f"  VRAM:             {g['mem_used_mib']:.0f} / {g['mem_total_mib']:.0f} MiB")
-            print(f"  Temperature:      {g['temperature']:.0f} °C")
-            print(f"  Power draw:       {g['power_draw']:.0f} W")
-            print(f"  PCIe:             Gen{g['pcie_gen']} x{g['pcie_width']}")
+            vram_gb = g['mem_total_mib'] / 1024
+            vram_icon = _icon(vram_gb, 24, 12)
+            lines.append(
+                f"[bold]GPU {i}:[/bold] {g['name']} — "
+                f"{g['mem_total_mib']:.0f} MiB VRAM {vram_icon}"
+            )
+
+            pcie_icon = _icon(g['pcie_gen'], 4, 3)
+            pcie_note = ""
+            if g['pcie_gen'] < 3:
+                pcie_note = " (idle — may power-save)"
+            lines.append(
+                f"  PCIe: Gen{g['pcie_gen']} x{g['pcie_width']} {pcie_icon}{pcie_note}"
+            )
+
+            temp_icon = _icon(g['temperature'], 80, 90, higher_is_better=False)
+            lines.append(
+                f"  Temp: {g['temperature']:.0f}°C {temp_icon}  "
+                f"Power: {g['power_draw']:.0f}W"
+            )
     else:
-        print("GPU:                not detected")
+        lines.append("[bold]GPU:[/bold] not detected")
 
-    print()
-    print(f"Total RAM:          {kb_to_gib(memory['total_kb']):.1f} GiB")
-    print(f"Available RAM:      {kb_to_gib(memory['available_kb']):.1f} GiB")
-    print(f"Swap total:         {kb_to_gib(memory['swap_total_kb']):.1f} GiB")
-    print(f"Swap used:          {kb_to_gib(memory['swap_used_kb']):.1f} GiB")
-    print(f"HugePages:          {'enabled' if memory['hugepages_total'] > 0 else 'disabled'} ({memory['hugepages_total']} pages)")
-
-    print()
-    print(f"NUMA Nodes:         {len(numa['nodes'])}")
-    for node in numa['nodes']:
-        mem_gib = node['mem_total_kb'] / (1024 * 1024)
-        print(f"  Node {node['id']}: CPUs {node['cpulist']}, Memory {mem_gib:.1f} GiB")
-    for g in numa['gpu_numa']:
-        node = g['numa_node']
-        if node == '-1':
-            label = "not associated (single-node or VM)"
-        else:
-            label = node
-        print(f"  GPU {g['gpu_index']} → NUMA Node {label}")
-
-    print()
+    # Storage
     if storage:
         for d in storage:
-            print(f"  {d['name']}: {d['size']}, {d['type']}")
+            s_icon = GOOD if 'NVMe' in d['type'] else (WARN if 'SSD' in d['type'] else CRIT)
+            lines.append(
+                f"[bold]Storage:[/bold] {d['name']} {d['size']} {d['type']} {s_icon}"
+            )
     else:
-        print("Storage:            not detected")
+        lines.append(f"[bold]Storage:[/bold] not detected {CRIT}")
 
-    print()
-    print(f"{'=' * 45}")
-    print(f"  AI READINESS SCORE: {score['score']:.1f}/10")
-    print(f"  Verdict: {score['verdict']}")
+    # HugePages
+    hp_enabled = memory['hugepages_total'] > 0
+    hp_icon = GOOD if hp_enabled else WARN
+    lines.append(
+        f"[bold]HugePages:[/bold] {'enabled' if hp_enabled else 'disabled'} {hp_icon}"
+    )
+
+    # Build hardware section
+    hw_text = Text.from_markup("\n".join(lines))
+
+    # Build score section
+    score_val = score['score']
+    if score_val >= 7.5:
+        score_style = "bold green"
+    elif score_val >= 5.0:
+        score_style = "bold yellow"
+    else:
+        score_style = "bold red"
+
+    score_lines = [f"[{score_style}]SCORE: {score_val:.1f}/10 — {score['verdict']}[/]"]
     if score['warnings']:
-        print()
-        print("  Issues:")
+        score_lines.append("")
         for w in score['warnings']:
-            print(f"    - {w}")
-    print(f"{'=' * 45}")
+            score_lines.append(f"{WARN}  {w}")
+
+    score_text = Text.from_markup("\n".join(score_lines))
+
+    # Print panels
+    console.print()
+    console.print(Panel(
+        hw_text,
+        title=f"[bold]HWPROBE REPORT — {hostname}[/bold]",
+        title_align="left",
+        border_style="cyan",
+        padding=(0, 1),
+    ))
+    console.print(Panel(
+        score_text,
+        title="[bold]AI READINESS[/bold]",
+        title_align="left",
+        border_style="cyan",
+        padding=(0, 1),
+    ))
 
 
 if __name__ == '__main__':
